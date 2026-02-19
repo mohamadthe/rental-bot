@@ -1,8 +1,11 @@
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 from bot.config import BOT_TOKEN
 from bot.database import create_pool, CREATE_TABLE
 from bot.states import ListingForm
@@ -20,11 +23,16 @@ def main_menu():
         [InlineKeyboardButton(text="❌ Delete My Listing", callback_data="delete")]
     ])
 
-async def on_startup():
+async def on_startup(app):
     global db_pool
     db_pool = await create_pool()
     async with db_pool.acquire() as conn:
         await conn.execute(CREATE_TABLE)
+    webhook_url = os.getenv("WEBHOOK_URL")
+    await bot.set_webhook(webhook_url)
+
+async def on_shutdown(app):
+    await bot.delete_webhook()
 
 @dp.message(commands=["start"])
 async def start(message: types.Message):
@@ -141,9 +149,15 @@ async def phone(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Listing saved successfully!", reply_markup=main_menu())
 
-async def main():
-    await on_startup()
-    await dp.start_polling(bot)
+def main():
+    app = web.Application()
+    webhook_path = "/webhook"
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=webhook_path)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    
+    port = int(os.getenv("PORT", 10000))
+    web.run_app(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
